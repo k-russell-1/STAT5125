@@ -1,0 +1,230 @@
+---
+title: "Homework 1 Template"
+format: 
+  html:
+    embed-resources: true
+editor: visual
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+#| message: FALSE
+library(tidyverse)
+theme_set(theme_bw())
+```
+
+## Question 1 \[30 Points total\]
+
+### Question 1(a) \[10 Points\]
+
+The iris dataset is available in R by default.
+
+```{r}
+iris |>
+  glimpse()
+
+# INSERT SOLUTION HERE
+
+ggplot(data = iris,
+       mapping = aes(x = Petal.Width,
+                     y = Petal.Length,
+                     color = Species)) + geom_point() + geom_smooth(method = "lm")
+```
+
+### Question 1(b) \[10 Points\]
+
+```{r}
+#| warning: FALSE
+library(palmerpenguins)
+library(hexbin)
+
+penguins |>
+  glimpse()
+
+# INSERT SOLUTION HERE
+
+ggplot(data = penguins,
+       mapping = aes(x = bill_length_mm, y = bill_depth_mm)) + geom_hex(color = "black") + 
+    scale_fill_gradient(low = "yellow",
+                      high = "red") + 
+  facet_wrap(~species) + 
+    labs(x = "Penguins' Bill length in millimeters",
+       y = "Penguins' Bill depth in millimeters") +
+  theme(legend.position = "bottom")
+```
+
+### Question 1(c) \[10 Points\]
+
+```{r}
+set.seed(1)
+# INSERT SOLUTION HERE
+mpg |>
+  ggplot(aes(x = cty, 
+             y = hwy,
+             alpha = 0.5)) + 
+  geom_point(position = "jitter", color = "blue") + 
+  labs(x = "City Mileage", y = "Highway Mileage") + 
+    geom_abline(slope = 1,
+              intercept = 0,
+              linetype = "dashed",
+              color = "red") + 
+  theme(legend.position = "FALSE") +
+  xlim(0, 50) + 
+  ylim(0, 50)
+```
+
+## Question 2 \[50 Points Total\]
+
+This question will apply to the gapminder dataset, available within the gapminder package on CRAN. Please download and load this package to complete the following questions.
+
+```{r}
+library(gapminder)
+
+gapminder |>
+  glimpse()
+```
+
+The function filter() will be helpful for completing these question. Though I've referenced it in the class notes a couple of times, we will not fully cover this function until January 23rd. If you want an early start on the homework, see Section 3.2.1 of the book for instructions on how to use filter().
+
+### Question 2(a) \[10 Points\]
+
+```{r}
+# INSERT SOLUTION HERE
+
+ggplot(data = filter(gapminder, year %in% c(1982, 1992, 2002)),
+       mapping = aes(x = gdpPercap, y = lifeExp, size = pop, color = continent)) +
+  geom_point() +
+  facet_wrap(~year, ncol = 1) + 
+    labs(x = "GDP per capita",
+       y = "Life Expectancy in Years",
+       size = "Population",
+       color = "Continent")
+```
+
+### Question 2(b) \[10 Points\]
+
+```{r}
+# INSERT SOLUTION HERE
+
+ggplot(data = filter(gapminder, country %in% c("Canada", "Cuba", "Mexico", "United States")),
+       mapping = aes(x = year, y = log(pop), color = country)) +
+  geom_point() +
+  labs(x = "Year", y = "Natural Logarithm of Population", color = "Country") + 
+  theme(legend.position = "top") + 
+  geom_line()
+```
+
+### Question 2(c) \[10 Points\]
+
+```{r}
+# INSERT SOLUTION HERE
+ggplot(data = filter(gapminder, year == 2002),
+  mapping = aes(x = lifeExp, fill = continent)) +
+  geom_histogram(binwidth = 2,
+                 color = "black") +
+  labs(x = "Life Expectancy in the Year 2002",
+       y = "Number of Countries",
+       fill = "Continent")
+```
+
+### Question 2(d) \[20 Points\]
+
+```{r}
+# INSERT PLOT 1 CODE
+
+  ggplot(data = filter(gapminder, year == 2002), 
+         mapping = aes(x = lifeExp, color = continent)) +
+  geom_freqpoly(binwidth = 2) + 
+      labs(x = "Life Expectancy in the Year 2002",
+       y = "Number of Countries",
+       color = "Continent")
+```
+
+```{r}
+# INSERT PLOT 2 CODE
+
+  ggplot(data = filter(gapminder, year == 2002), 
+         mapping = aes(x = lifeExp, fill = continent)) +
+  facet_wrap(~continent, ncol = 1) +
+  geom_boxplot(color = "black") + 
+  theme(axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank()) +
+    labs(x = "Life Expectancy in the Year 2002") + 
+    theme(legend.position = "none")
+    
+```
+
+```{r}
+# INSERT PLOT 3 CODE
+
+  ggplot(data = filter(gapminder, year == 2002), 
+         mapping = aes(x = continent, y = lifeExp, fill = continent)) +
+  geom_violin(color = "black", draw_quantiles = c(.25, .50, .75)) + 
+    labs(x = "Life Expectancy in the Year 2002") + 
+    theme(legend.position = "none")
+```
+
+Provide Explanation here.
+
+In general, I would argue that the violin plot is the most informative, given that we are able to see the density of each continent's life expectancy for a complete side-by-side view of the whole data. However, the lack of entries for Oceania seems to stretch the other categories quite thin, so although the quantile lines and colors are helpful, the chart as a whole is not very easy to read. I find the facet-wrapped boxplots to be the easiest to read, although there is no indication of how many countries there are per continent. Therefore, though it is not the most aesthetically appealing, I find that the frequency polygon chart conveys the most information.
+
+## Question 3 \[20 Points\]
+
+In this question, I will present you with a graphic plot, and code that creates a graphic that doesn't quite accomplish the goal. Your objective is to modify the incorrect code until it creates the desired plot.
+
+### Question 3(a) \[5 Points\]
+
+```{r}
+# MODIFY THIS CODE
+gapminder |>
+  filter(continent == "Oceania") %>% 
+  ggplot(aes(x = year, y = pop, linetype = country)) + 
+  geom_line() +
+  geom_point(color = "black", fill="green", shape=21) +
+  lims(y = c(0, NA))
+```
+
+### Question 3(b) \[5 Points\]
+
+```{r}
+# MODIFY THIS CODE
+
+library(palmerpenguins)
+penguins |>
+  ggplot(aes(x = body_mass_g)) +
+  geom_histogram(binwidth = 200, color = "black", fill="white") +
+  facet_grid(species ~ sex)
+```
+
+### Question 3(c) \[5 Points\]
+
+```{r}
+# MODIFY THIS CODE
+
+set.seed(1)
+iris  |>
+  ggplot(aes(x = Sepal.Length,
+             y = Sepal.Width,
+             color = Species)) +
+  facet_wrap(~Species) + 
+  geom_point() +
+  geom_density2d(color = "black") + 
+  theme(legend.position = "none")
+```
+
+### Question 3(d) \[5 Points\]
+
+```{r}
+# MODIFY THIS CODE
+
+#| message: FALSE
+iris |>
+  filter(Sepal.Width > 3) |>
+  ggplot(aes(x = fct_infreq(Species), fill = fct_infreq(Species))) +
+  geom_bar() +
+  labs(y = "Number of Specimens with Sepal Width > 3",
+       x = "Species") + 
+  theme(legend.position = "none")
+```

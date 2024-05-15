@@ -1,0 +1,488 @@
+---
+title: "Homework 10 Template"
+author: Kevin Russell
+format: 
+  html:
+    embed-resources: true
+---
+
+The goal of this week's homework is to practice doing model validation within the tidymodels family of packages. For our analysis, I have created a dataset related to flight delays coming into Hartford in the year 2008.
+
+These new data are provided on HuskyCT as airline_BDL.csv.
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+theme_set(theme_bw())
+tidymodels_prefer()
+
+airline_BDL <- read_csv("airline_BDL.csv")
+
+airline_BDL <- airline_BDL |>
+  mutate(arr_delay_over_30 = factor(arr_delay_over_30))
+
+airline_BDL |>
+  glimpse()
+```
+
+Each of the 10144 rows in this dataset corresponds to a different flight into Bradley airport in 2008. There 8 columns (variables) described as follows: 
+
+- arr_delay_over_30: a logical variable indicating whether or not the flight's actual arrival time was 30 or more minutes later than its scheduled arrival time. This variable will be our response variable
+
+- distance: the distance (in miles) the flight had to travel
+
+- origin: the airport of origin 
+
+- day_of_week: the day of the week that the flight departed
+
+- departure_delay: the number of minutes between the flight's scheduled departure time and actual departure time (negative means the flight departed early)
+
+- the hour (1 means 1 am, 23 means 11 pm, etc.) of the flight's scheduled departure.
+
+- the minute of the flights scheduled departure
+
+Our goal is to create a model that predicts whether or not a flight's arrival will be delayed 30 or more minutes based on the remaining variables.
+
+# Problem 1 [23 Points Total]
+
+We will define four candidate models that we will be comparing. Please develop a workflow for each model that is described.
+
+## Part A [7 Points]
+
+A logistic regression, fit using maximum likelihood, with arr_delay_over_30 as the response and all other variables as explanatory variables. 
+
+The preprocessor should be defined using a recipe. The recipe should normalize all the numeric predictors. Moreover, it should replace any origin city that occurs in less than 1 percent of the data with an "other" category
+
+Call this workflow workflow_A.
+
+```{r}
+fit_A <- logistic_reg() |>
+  set_engine("glm") |>
+  set_mode("classification")
+
+workflow_A <- workflow()
+
+recipe_A <- recipe(data = airline_BDL,
+                      formula = arr_delay_over_30 ~ .) 
+
+recipe_A <- recipe_A |>
+  step_other(origin, 
+             threshold = 0.01,
+             other = "other") |>
+  step_dummy(all_nominal_predictors()) |>
+  step_normalize(all_predictors())
+
+workflow_A <- workflow_A |>
+  add_model(fit_A) |>
+  add_recipe(recipe_A)
+
+fit_A <- workflow_A |>
+  fit(airline_BDL)
+
+fit_A |>
+  tidy()
+```
+
+## Part B [5 Points]
+
+A logistic regression, fit using the lasso with a penalty = 0.1, with arr_delay_over_30 as the response and all other variables as explanatory variables. Use the same recipe as in A. Call this workflow workflow_B.
+
+```{r}
+fit_B <- logistic_reg(penalty = 0.1) |>
+  set_engine("glmnet") |>
+  set_mode("classification")
+
+workflow_B <- workflow()
+
+workflow_B <- workflow_B |>
+  add_model(fit_B) |>
+  add_recipe(recipe_A)
+
+fit_B <- workflow_B |>
+  fit(airline_BDL)
+
+fit_B |>
+  tidy()
+```
+
+## Part C [5 Points]
+
+A k-nearest neighbors model, fit using k = 10, with arr_delay_over_30 as the response and all other variables as explanatory variables. Use the same recipe as in A. Call this workflow workflow_C.
+
+```{r}
+library(kknn)
+
+fit_C <- nearest_neighbor(weight_func = "rectangular", neighbors = 10) |>
+  set_engine("kknn") |>
+  set_mode("classification")
+
+workflow_C <- workflow()
+
+workflow_C <- workflow_C |>
+  add_model(fit_C) |>
+  add_recipe(recipe_A)
+
+fit_C <- workflow_C |>
+  fit(airline_BDL)
+
+fit_C |>
+  extract_fit_engine()
+```
+
+## Part D [5 Points]
+
+A random forest model, fit using ranger, with arr_delay_over_30 as the response and all other variables as explanatory variables. Use the same recipe as in A. Call this workflow workflow_D.
+
+```{r}
+fit_D <- rand_forest() |>
+  set_mode("classification") |>
+  set_engine("ranger")
+
+workflow_D <- workflow()
+
+workflow_D <- workflow_D |>
+  add_model(fit_D) |>
+  add_recipe(recipe_A)
+
+fit_D <- workflow_D |>
+  fit(airline_BDL)
+
+fit_D |>
+  extract_fit_engine()
+```
+
+
+# Problem 2 [25 Points Total]
+
+Now, we will practice different data splitting strategies.
+
+## Part A [5 Points]
+
+First, split the data into a testing and training set with 70 percent of the data being used for training, 30 percent being used for test, and no stratification.
+
+```{r}
+set.seed(12)
+airline_BDL_split <- initial_split(airline_BDL, 
+                                 prop = 0.7)
+
+airline_BDL_train <- airline_BDL_split |>
+  training()
+
+airline_BDL_test <- airline_BDL_split |>
+  testing()
+```
+
+## Part B [5 Points]
+
+From the training set, create a variable of class rset called val_set that contains test-validation split where the validation set contains 20 percent of the data in the training set.
+
+```{r}
+set.seed(14)
+val_set <- validation_split(airline_BDL_train, 
+                            prop = 0.8)
+```
+
+## Part C [5 Points]
+
+From the training set, create a variable of class rset called vfold_set that contains a 5-fold cross validation split.
+
+```{r}
+vfold_set <- airline_BDL_train |> 
+  vfold_cv(v = 5)
+```
+
+## Part D [5 Points]
+
+From the training set, create a variable of class rset called mc_set that contains 10 random splits of the data.
+
+```{r}
+mc_set <- airline_BDL_train |>
+  mc_cv(prop = 0.75,
+        times = 20)
+```
+
+## Part E [5 Points]
+
+From the training set, create a variable of class rset called bootstrap_set that contains 10 bootstrap random splits of the data.
+
+```{r}
+bootstrap_set <- airline_BDL_train  |>
+  bootstraps(times = 10)
+```
+
+# Problem 3 [37 Points Total]
+
+We are now going to compare the performance of each in the workflows in Problem 1 using each of the validation strategies from Problem 2.
+
+## Part A [8 Points]
+
+Using this metric set and a re-substitution strategy, compare the performance of the four workflows (workflow_A, workflow_B, workflow_C, and workflow_D) defined in Problem 1. Use area under the ROC curve as the comparison metric.
+
+```{r}
+workflow_names <- c("logistic", 
+                    "lasso",
+                    "knn_10",
+                    "random_forest")
+
+workflow_objects <- list(workflow_A,
+                         workflow_B,
+                         workflow_C,
+                         workflow_D)
+
+workflows_tbl <- tibble(work_names = workflow_names,
+                        work_objects = workflow_objects) 
+
+set.seed(1)
+workflows_tbl <-  workflows_tbl |>
+  rowwise() |>
+  mutate(fits = list(fit(work_objects, 
+                         airline_BDL_train)))
+```
+
+Which workflow performed best according to this metric?
+
+```{r}
+workflows_resub <- workflows_tbl |>
+  mutate(pred_class = list(predict(fits,
+                                    airline_BDL_train,
+                                    type = "class"))) |>
+    mutate(pred_prob = list(predict(fits,
+                                  airline_BDL_train,
+                                  type = "prob"))) |>
+    mutate(predictions = list(bind_cols(pred_class, pred_prob))) |>
+   select(-c(pred_class, pred_prob))
+
+
+predictions_resub  <- workflows_resub |>
+  select(work_names, 
+         predictions) |>
+  unnest(cols = c(predictions)) |>
+  cbind(Delay = airline_BDL_train |>
+          pull(arr_delay_over_30))
+
+predictions_resub |>
+  glimpse()
+```
+
+```{r}
+roc_auc_all <- predictions_resub |>
+  group_by(work_names) |>
+  roc_auc(truth = Delay,
+          .pred_TRUE,
+          event_level = "second")
+
+roc_auc_all
+```
+
+
+## Part B [7 Points]
+
+Define a metric set consisting exclusively of the area under the ROC curve.
+
+```{r}
+set.seed(1)
+delay_metric_set <- metric_set(roc_auc)
+```
+
+Use this metric set and the validation set from Problem 2B to compare the performance of the four workflows (workflow_A, workflow_B, workflow_C, and workflow_D) defined in Problem 1.
+
+```{r}
+workflows_val <- workflows_tbl |>
+  mutate(fits = list(fit_resamples(work_objects,
+                                   val_set,
+                                   metrics = delay_metric_set))) |>
+  mutate(metrics = list(collect_metrics(fits)))
+
+```
+
+Which workflow performed best according to this metric?
+
+```{r}
+workflows_val |>
+  select(c(work_names,
+           metrics)) |>
+  unnest(metrics) |>
+  arrange(.metric)
+
+# Lasso
+```
+
+## Part C [7 Points]
+
+Use the same metric set from above and vfold_set from Problem 2C to compare the performance of the four workflows (workflow_A, workflow_B, workflow_C, and workflow_D) defined in Problem 1.
+
+```{r}
+workflows_vfold <- workflows_tbl |>
+  mutate(fits = list(fit_resamples(work_objects,
+                                   vfold_set,
+                                   metrics = delay_metric_set))) |>
+  mutate(metrics = list(collect_metrics(fits)))
+```
+
+Which workflow performed worst according to this metric?
+
+```{r}
+workflows_vfold |>
+  select(c(work_names,
+           metrics)) |>
+  unnest(metrics) |>
+  arrange(.metric)
+
+#knn
+```
+
+## Part D [10 Points]
+
+Use the same metric set from above and mc_set from Problem 2D to compare the performance of the four workflows (workflow_A, workflow_B, workflow_C, and workflow_D) defined in Problem 1.
+
+```{r}
+workflows_mcset <- workflows_tbl |>
+  mutate(fits = list(fit_resamples(work_objects,
+                                   mc_set,
+                                   metrics = delay_metric_set))) |>
+  mutate(metrics = list(collect_metrics(fits)))
+```
+
+
+According to the results, is the difference between the performance of workflow A (logistic regression) and workflow D (random forest) statistically significant?
+
+```{r}
+workflows_vfold |>
+  select(c(work_names,
+           metrics)) |>
+  unnest(metrics) |>
+  arrange(.metric)
+
+#No, not significantly different
+```
+
+
+## Part E [5 Points]
+
+Use the same metric set from above and bootstrap_set from Problem 2E to compare the performance of the four workflows (workflow_A, workflow_B, workflow_C, and workflow_D) defined in Problem 1.
+
+```{r}
+workflows_bootsrap <- workflows_tbl |>
+  mutate(fits = list(fit_resamples(work_objects,
+                                   bootstrap_set,
+                                   metrics = delay_metric_set))) |>
+  mutate(metrics = list(collect_metrics(fits)))
+```
+
+Which workflow's performance estimator has the highest standard error?
+
+```{r}
+workflows_bootsrap |>
+  select(c(work_names,
+           metrics)) |>
+  unnest(metrics) |>
+  arrange(.metric)
+
+#knn
+
+```
+
+# Problem 4 [15 Points Total]
+
+## Part A [9 Points]
+
+Create plot with geom_col(position = "dodge") to compare the estimated predictive performance of all four models based on the different validation strategies discussed above:
+
+- re-substitution, 
+- a validation set, 
+- vfold cross validation, 
+- Monte Carlo cross validation, and 
+- bootstrap cross validation. 
+
+```{r}
+workflows_val <- workflows_val |>
+  select(c(work_names,
+           metrics)) |>
+  unnest(metrics) |>
+  mutate(validation = "validation") |>
+  select(c(validation, .metric, mean, work_names))
+```
+
+```{r}
+workflows_val
+```
+```{r}
+roc_auc_all <- roc_auc_all |>
+  mutate(validation = "resub") |>
+  select(-c(.estimator))
+```
+```{r}
+roc_auc_all <- roc_auc_all |>
+  mutate(estimate = .estimate) |>
+  select(-c(.estimate))
+```
+
+```{r}
+roc_auc_all <- roc_auc_all |>
+  mutate(mean = estimate) |>
+  select(-c(estimate))
+```
+
+```{r}
+workflows_bootsrap <- workflows_bootsrap |>
+  select(c(work_names,
+           metrics)) |>
+  unnest(metrics) |>
+  mutate(validation = "bootstrap") |>
+  select(c(validation, .metric, mean, work_names))
+```
+
+
+```{r}
+workflows_mcset <- workflows_mcset |>
+  select(c(work_names,
+           metrics)) |>
+  unnest(metrics) |>
+  mutate(validation = "MC") |>
+  select(c(validation, .metric, mean, work_names))
+```
+
+```{r}
+workflows_vfold <- workflows_vfold |>
+  select(c(work_names,
+           metrics)) |>
+  unnest(metrics) |>
+  mutate(validation = "vfold") |>
+  select(c(validation, .metric, mean, work_names))
+```
+
+```{r}
+united <- rbind(workflows_vfold, workflows_mcset, workflows_bootsrap, workflows_val, roc_auc_all)
+```
+
+The results may resemble the following. Note: it is unlikely to be identical to due to randomness.
+
+```{r}
+united |>
+  select(c(work_names,
+           validation,
+           mean)) |>
+  ggplot(aes(y = work_names,
+             fill = validation,
+             x = mean)) +
+  geom_col(position = "dodge") +
+  labs(x = "Performance Estimate", y = "Workflow", fill = "method") +
+  theme(legend.position = "top")
+```
+
+Comment on the the implications of this figure. Which validation methods seem to mostly agree? Which tend to differ? For workflows do they differ? Why do you think these differences occur?
+
+All of the validation methods seemed to do poorly for k nearest neighbors, with the exception of resub. This could be because only one of the factors (dep_delay) has a major impact on the response variable, so nearest neighbors may undercut the importance of that factor. Other than that, the random forest, lasso, and logistic workflows all seemed to yield similar results. 
+
+
+## Part B [6 Points]
+
+Evaluate the predictive performance on the held-out test data.
+
+```{r}
+# YOUR CODE HERE
+```
+
+Which validation methods seemed to do a good job on estimating performance on the test set? Which ones did poorly?
+
+EXPLAIN HERE
