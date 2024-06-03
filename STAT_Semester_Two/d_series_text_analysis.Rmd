@@ -1,0 +1,976 @@
+---
+title: "Final Project"
+author: "Kevin Russell"
+date: '2024-04-30'
+output: html_document
+---
+
+```{r}
+library(dplyr)
+library(stringr)
+library(udpipe)
+library(tidyr)
+library(lattice) 
+```
+
+
+We'll start by reading in the data from the first draft. There is some cleaning to be done-- the quote character from the google doc doesn't look like the quote character ". Additionally, we'll have to insert a forward slash in front of those quotes, so that R doesn't get confused. 
+
+```{r}
+# Read the text file in, line by line
+lines <- readLines("C:/Users/kruss/Downloads/Copy of Book 1 (text data).txt")
+
+lines <- gsub("“|”", '"', lines)
+lines <- gsub('"', '\"', lines)
+```
+
+Now we do the same for the second book.
+
+```{r}
+lines_two <- readLines("C:/Users/kruss/Downloads/Copy of Book Two (text data).txt")
+
+
+lines_two <- gsub("“|”", '"', lines_two)
+lines_two <- gsub('"', '\"', lines_two)
+
+```
+
+Let's look at the lines we've parsed: 
+```{r}
+lines[997:1000]
+```
+```{r}
+lines_two[997:1000]
+```
+It seems like some of the lines have lots of spaces at the start-- we can use gsub() and regular expressions to delete all spaces that start a line in both lines and lines_two.
+
+```{r}
+lines <- gsub("^\\s+", "", lines)
+
+lines[997:1000]
+```
+```{r}
+lines_two <- gsub("^\\s+", "", lines_two)
+
+lines_two[997:1000]
+```
+Looks good.
+Now, let's try grouping the paragraphs into sets of four. We can use a for loop, iterating through the list of lines by four.
+
+```{r}
+new_lines <- list()
+
+for (i in seq(1, length(lines), by = 4)) {
+  four_lines <- paste(lines[i:(i + 3)], collapse = " ")
+  new_lines <- append(new_lines, list(four_lines))
+}
+```
+
+```{r}
+new_lines <- new_lines[1:821]
+new_lines[775]
+```
+```{r}
+new_lines_two <- list()
+
+for (i in seq(1, length(lines_two), by = 4)) {
+  four_lines_two <- paste(lines_two[i:(i + 3)], collapse = " ")
+  new_lines_two <- append(new_lines_two, list(four_lines_two))
+}
+```
+
+```{r}
+new_lines_two <- new_lines_two[1:468]
+new_lines_two[400]
+```
+There is some substance to the entries in the new_lines and new_lines_two lists. Now, let's throw them in dataframes, along with the draft number that they have come from. 
+
+```{r}
+df_one <- data.frame(text = unlist(new_lines))
+
+df_two <- data.frame(text = unlist(new_lines_two))
+```
+
+```{r}
+df_one <- df_one |>
+  mutate(draft_num = 1)
+
+df_two <- df_two |>
+  mutate(draft_num = 2)
+```
+
+```{r}
+df<- rbind(df_one, df_two)
+
+df <- df|>
+    mutate(text_id = row_number())
+```
+
+And there we have it. There are 1,289 observations-- 821 are from draft 1, and 468 are from draft 2. We'll aim to build a model that predicts which text samples are from which draft. 
+
+Essentially, we'll need to pull out important info from what we've been given.
+
+
+First, let's pull out the sentiments for each word using afinn. Each word in its dictionary gets a score, so we can sum up the scoring for each text row.
+
+Source consulted: https://afit-r.github.io/sentiment_analysis
+```{r}
+library(tidytext)
+
+get_sentiments("afinn")
+```
+
+We use unnest_tokens to pull out words and score them using afinn. Then, we use group_by to aggregate the scores for each entry.
+```{r}
+library(textdata)
+
+sentiments <- df |>
+  unnest_tokens(word, text) |>
+  inner_join(get_sentiments("afinn"), by = "word") |>
+  group_by(text_id, draft_num) |>
+  summarise(sentiment = sum(value))
+```
+
+And now, we use a left join to restore the table, ensuring that text rows with no words in the dictionary get a sentiment score of 0, or neutral.
+```{r}
+df <- df |>
+  left_join(sentiments, by = "text_id") |>
+  mutate(sentiment = replace_na(sentiment, 0)) |>
+  mutate(draft_num = draft_num.x) |>
+  dplyr::select(c("text", "text_id", "draft_num", "sentiment"))
+```
+
+Now that we have sentiment scoring, we can calculate word length for each entry with regex finding matches for unique words.
+
+```{r}
+df <- df |>
+  mutate(word_count = str_count(text, '\\w+'))
+```
+
+We can also add chapters to the dataframe, based on the fact that the sequence './.' marks the end of a chapter in the text column. We'll use the cumsum() function to mark chapters, and then reset the count when draft two starts.
+```{r}
+df <- df |>
+  mutate(chapter = cumsum(str_count(text, './\\.')) + 1) |>
+  mutate(chapter = ifelse(draft_num == 2, chapter - 45, chapter))
+```
+
+POS extraction: Site referenced
+https://corpling.hypotheses.org/4081
+
+We will pull out the proportion of each part of speech used in the documents that are the rows of the df. 
+
+```{r}
+m_eng_ewt   <- udpipe_download_model(language = "english-ewt")
+m_eng_ewt_path <- m_eng_ewt$file_model
+m_eng_ewt_loaded <- udpipe_load_model(file = m_eng_ewt_path)
+```
+
+We extract the parts of speech from each word using this code:
+
+```{r}
+pos_table <- udpipe_annotate(m_eng_ewt_loaded, x = df$text) |>
+      as.data.frame() |>
+      dplyr::select(-sentence)
+```
+
+Then we summarize the data and clean the columns so that they are of the format we want. We'll look at the raw counts (n()) of each part-of-speech first. We'll also perform a pivot_wider, so that the parts of speech are their own columns.
+
+```{r}
+pos_table_test <- pos_table |>
+  group_by(doc_id, upos) |>
+  summarise(count = n()) |>
+  pivot_wider(names_from = upos, values_from = count, values_fill = 0) |>
+  mutate(text_id = substring(doc_id, first = 4)) |>
+  mutate(text_id = as.numeric(text_id))
+```
+We join the POS table with the existing df.
+
+```{r}
+df <- df |>
+  left_join(pos_table_test, by="text_id")
+```
+
+And now, we take the proportion of the parts of speech.
+
+```{r}
+df <- df |>
+  mutate(ADJ = ADJ/word_count) |>
+  mutate(ADP = ADP/word_count) |>
+  mutate(ADV = ADV/word_count) |>
+  mutate(CCONJ = CCONJ/word_count) |>
+  mutate(DET = DET/word_count) |>
+  mutate(NOUN = NOUN/word_count) |>
+  mutate(NUM = NUM/word_count) |>
+  mutate(PART = PART/word_count) |>
+  mutate(PRON = PRON/word_count) |>
+  mutate(PROPN = PROPN/word_count) |>
+  mutate(PUNCT = PUNCT/word_count) |>
+  mutate(SCONJ = SCONJ/word_count) |>
+  mutate(SYM = SYM/word_count) |>
+  mutate(VERB = VERB/word_count) |>
+  mutate(INTJ = INTJ/word_count) |>
+  mutate(X = X/word_count) |>
+  mutate(AUX = AUX/word_count)
+```
+
+```{r}
+df <- df |>
+  dplyr::select(-doc_id)
+```
+
+
+Topic Modeling: In this section, we will build a topic model that includes eight topics. We will then give each row eight new column, each representing the likelihood that the topic generated the document (between 0 and 1).
+
+```{r}
+library(topicmodels)
+
+data("stop_words")
+```
+We'll pull out our words from the text:
+
+```{r}
+df_tidy <- df |>
+  unnest_tokens(word, 
+                text)
+```
+
+Then pull counts.
+```{r}
+df_counts <- df_tidy |>
+  summarize(term_frequency = n(),
+            .by = c(word, text_id)) |>
+  arrange(desc(term_frequency))
+
+df_counts |>
+  head()
+```
+
+
+And remove stop words.
+```{r}
+df_counts_clean <- df_counts |> 
+    anti_join(stop_words,
+              by = join_by(word)) |>
+  mutate(document = text_id) |>
+  mutate(count = term_frequency) |>
+  mutate(term = word) |>
+  mutate(document = as.character(document)) |>
+  mutate(count = as.double(count)) |>
+  dplyr::select(document, count, term)
+
+# Pull out characters that dominate the text or could clue the model in on what draft the passage is from 
+df_counts_clean <- df_counts_clean |>
+  filter(!str_detect(term, "quinn|val|valerie|nicholas|steven"))
+
+df_counts_clean |>
+  head()
+```
+
+
+Now we create our doc-term matrix for topic modeling. 
+```{r}
+library("tidytext")
+
+document_term_matrix <- df_counts_clean |> 
+  cast_dtm(document = document, 
+           term = term,
+           value = count)
+
+document_term_matrix
+```
+Here we build the model with 8 topics.
+
+```{r}
+library(topicmodels)
+library(MASS)
+
+
+lda <- document_term_matrix |>
+  LDA(k = 8, 
+      control = list(seed = 1))
+
+
+save(lda, file = "lda.Rda")
+```
+And then visualize those topics. 
+
+```{r}
+library("ggplot2")
+
+load("lda.Rda")
+topics <- lda |>
+  tidy(matrix = "beta")
+
+top_terms <- topics |>
+  group_by(topic) |>
+  slice_max(beta, n = 10) |> 
+  mutate(topic = factor(topic))
+
+top_terms |>
+  ggplot(aes(beta, 
+             term, 
+             fill = topic)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, 
+             scales = "free_y", 
+             ncol = 4) 
+```
+We can also use tf/idf weighting to generate topics. These seem to put more emphasis on characters (very high probabilities for topics 1 and 7, among others), but these topics are a bit more interpretable, perhaps-- 8 looks like it might be romance-related, 5 is dialogue words, 1 seems to have to do with the evil organization that the main characters are up against. 
+
+
+```{r}
+top_terms_tf_idf <- topics |>
+  filter(beta > 0.002) |>
+    bind_tf_idf(term, 
+              topic, 
+              beta) |>
+  group_by(topic) |>
+  slice_max(tf_idf,
+            n = 10) |>
+  mutate(topic = factor(topic))
+
+top_terms_tf_idf |>
+  ggplot(aes(beta, 
+             term, 
+             fill = topic)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, 
+             scales = "free_y", 
+             ncol = 4) 
+```
+Now, we pull out our topic probabilities.
+
+```{r}
+lda_memberships <- lda |>
+  tidy(matrix = "gamma") |>
+  mutate(text_id = as.integer(document)) |>
+  dplyr::select(-document)
+
+lda_memberships
+```
+And that information is joined back into the df.
+```{r}
+df <- df |>
+  left_join(lda_memberships, by = "text_id")
+```
+
+And we do some cleaning of the columns we have generated.
+```{r}
+df <- df |>
+  pivot_wider(names_from = topic, values_from = gamma, values_fill = 0) |>
+  mutate(topic_1 = `1`) |>
+  mutate(topic_2 = `2`) |>
+  mutate(topic_3 = `3`) |>
+  mutate(topic_4 = `4`) |>
+  mutate(topic_5 = `5`) |>
+  mutate(topic_6 = `6`) |>
+  mutate(topic_7 = `7`) |>
+  mutate(topic_8 = `8`) |>
+  dplyr::select(-c(`1`, `2`, `3`, `4`, `5`, `6`, `7`, `8`))
+
+```
+
+```{r}
+df
+```
+
+At this point, we have sentiment scoring, part of speech proportion, and LDA topic probabilities from our text data. We have extracted this numerical information from the data so that our models might be able to classify the text into its correct draft. Let's get a preliminary look at our data.
+
+```{r}
+# Overall word cloud (Quinn is excluded)
+
+library(ggwordcloud)
+
+df_counts_clean |>
+  group_by(term) |>
+  summarize(term_frequency = sum(count)) |>
+  slice_max(term_frequency, 
+            n = 50) |>
+  ggplot() +
+  geom_text_wordcloud_area(aes(label = term,
+                               size = term_frequency)) +
+  scale_size_area(max_size = 40) 
+```
+
+We can also make a word cloud for the first chapter of the first draft:
+
+```{r}
+df_counts_chapter <- df_tidy |>
+  summarize(term_frequency = n(),
+            .by = c(word, chapter, draft_num)) |>
+  arrange(desc(term_frequency))
+
+df_counts_chapter |>
+  head()
+```
+
+
+```{r}
+df_counts_clean_chapter <- df_counts_chapter |> 
+    anti_join(stop_words,
+              by = join_by(word)) 
+
+df_counts_clean_chapter |>
+  head()
+```
+
+```{r}
+df_counts_clean_chapter |>
+  filter(chapter == 1) |>
+  filter(draft_num == 1) |>
+  slice_max(term_frequency, 
+            n = 50, with_ties = FALSE)  |>
+  ggplot() +
+  geom_text_wordcloud_area(aes(label = word,
+                               size = term_frequency)) +
+  scale_size_area(max_size = 40) 
+
+```
+We can also plot average document length by chapter. Each entry represents the average paragraph length in words of the chapter.
+
+```{r}
+df |>
+  group_by(draft_num, chapter) |>
+  summarise(avg_word_count = mean(word_count)) |>
+  mutate(avg_word_count = avg_word_count/4) |>
+    ggplot(aes(x = chapter, y = avg_word_count)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~ draft_num) + 
+  labs(x = "Chapter Number", y = "Average word count of Paragraphs")
+```
+Though the first few chapters of draft 2 seem visually to have longer paragraphs than those in draft 1, it doesn't seem readily apparent that the paragrah lengths are different between the books. 
+
+Now, let's look at how the average topic scores evolve over the course of the novel:
+
+```{r}
+df_topics <- df |>
+  group_by(draft_num, chapter) |>
+  summarise(topic_1 = mean(topic_1), topic_2 = mean(topic_2), topic_3 = mean(topic_3),
+            topic_4 = mean(topic_4), topic_5 = mean(topic_5), topic_6 = mean(topic_6),
+            topic_7 = mean(topic_7), topic_8 = mean(topic_8)) 
+
+df_topics
+```
+
+
+```{r}
+df_topics |>
+  pivot_longer(cols = starts_with("topic"), names_to = "topic", values_to = "value") |>
+  ggplot(aes(x = chapter, y = value, fill = topic)) +
+  geom_bar(stat = "identity", position = "stack") +
+  facet_wrap(~ draft_num) +
+  labs(x = "Chapter", y = "Mean Topic Probability", title = "Topic Proportion per Chapter", fill = "Topic")
+```
+
+Topics 1 and 3 are more common in draft 1, while topics 2 and perhaps 7 seem more common in draft 2.
+
+We can track proportion of noun, verb, and adjective use as well:
+
+```{r}
+df_pos <- df |>
+  group_by(draft_num, chapter) |>
+  summarise(nouns = mean(NOUN), verbs = mean(VERB), adjectives = mean(ADJ))
+
+df_pos
+```
+
+```{r}
+df_pos |>
+  ggplot(aes(x = chapter, y = nouns)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~ draft_num) +
+  labs(x = "Chapter", y = "Noun Proportion", title = "Noun Proportion per Chapter")
+```
+
+```{r}
+df_pos |>
+  ggplot(aes(x = chapter, y = verbs)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~ draft_num) +
+  labs(x = "Chapter", y = "Verb Proportion", title = "Verb Proportion per Chapter")
+```
+
+```{r}
+df_pos |>
+  ggplot(aes(x = chapter, y = adjectives)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~ draft_num) +
+  labs(x = "Chapter", y = "Adjective Proportion", title = "Adjective Proportion per Chapter")
+```
+It doesn't seem like there is an overall pattern in the proportion in which these parts of speech are used throughout the course of the two drafts. 
+
+To conclude our EDA, we can see how sentiment changes over chapter.
+
+```{r}
+df_sent <- df |>
+  group_by(draft_num, chapter) |>
+  summarise(sentiment = mean(sentiment))
+
+df_sent
+```
+
+```{r}
+df_sent |>
+  ggplot(aes(x = chapter, y = sentiment)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~ draft_num) +
+  labs(x = "Chapter", y = "Mean Sentiment Score", title = "Mean Sentiment Score per Chapter")
+```
+Perhaps draft 1 is more extreme, in one way or another?
+
+Model Fitting
+
+Let's split the data, and then fit our models.
+
+```{r}
+library(tidymodels)
+
+#0 is first draft, 1 is second draft
+df <- df |>
+  mutate(draft_num = draft_num - 1)
+
+set.seed(12345)
+df_split <- initial_split(df, 
+                              prop = 0.8)
+
+df_train <- df_split |>
+  training()
+
+df_test <- df_split |>
+  testing()
+```
+
+
+```{r}
+df_train <- df_train |>
+  mutate(draft_num = as.factor(draft_num)) |>
+  dplyr::select(-c(text, text_id, chapter))
+
+df_test <- df_test |>
+  mutate(draft_num = as.factor(draft_num)) |>
+  dplyr::select(-c(text, text_id, chapter))
+```
+
+Model 1: Logistic regression (with small penalty) on all factors.
+
+```{r}
+df_parsnip_1 <- logistic_reg(penalty = 0.01) |> 
+  set_mode("classification") |>
+  set_engine("glmnet")
+
+df_workflow_1 <- workflow() |>
+  add_model(df_parsnip_1) |>
+  add_formula(draft_num ~ .)
+
+df_fit_1 <- df_workflow_1 |>
+  fit(df_train)
+```
+
+Model 2: Logistic regression using top 5 principal components.
+
+```{r}
+df_parsnip_2 <- logistic_reg() |> 
+  set_mode("classification") |>
+  set_engine("glm")
+
+df_recipe_2 <- recipe(draft_num ~ .,
+                       data = df_train)
+
+df_recipe_2 <- df_recipe_2  |> 
+  step_normalize(all_numeric_predictors()) |>
+  step_pca(all_numeric_predictors(), 
+           num_comp = 5) |>
+  step_dummy(all_nominal_predictors())
+  
+
+df_workflow_2 <- workflow() |>
+  add_model(df_parsnip_2) |>
+  add_recipe(df_recipe_2)
+```
+
+Model 3: KNN with K = 3.
+```{r}
+df_parsnip_3 <- nearest_neighbor() |> 
+  set_mode("classification") |>
+  set_engine("kknn", 
+             neighbors = 3)
+
+df_workflow_3 <- workflow() |>
+  add_model(df_parsnip_3) |>
+  add_formula(draft_num ~ .)
+```
+
+
+Model 4: Random forest.
+
+```{r}
+library(ranger)
+df_parsnip_4 <- rand_forest() |> 
+  set_mode("classification") |>
+  set_engine("ranger")
+
+df_workflow_4 <- workflow() |>
+  add_model(df_parsnip_4) |>
+  add_formula(draft_num ~ .)
+```
+Model 5: Naive Bayes.
+
+```{r}
+library(klaR)
+library(discrim)
+
+df_parsnip_5 <- naive_Bayes() |> 
+  set_mode("classification") |>
+  set_engine("klaR")
+
+df_workflow_5 <- workflow() |>
+  add_model(df_parsnip_5) |>
+  add_formula(draft_num ~ .)
+```
+
+
+
+```{r}
+workflow_names <- c("glm_lasso", 
+                 "glm_PCA",
+                 "KNN",
+                 "rf",
+                 "naive_bayes")
+```
+
+
+```{r}
+workflow_objects <- list(df_workflow_1,
+                           df_workflow_2,
+                          df_workflow_3,
+                           df_workflow_4,
+                           df_workflow_5)
+```
+
+```{r}
+workflows_tbl <- tibble(work_names = workflow_names,
+                        work_objects = workflow_objects)
+
+workflows_tbl
+```
+
+```{r}
+set.seed(1)
+workflows_tbl <- workflows_tbl |>
+  rowwise() |>
+  mutate(fits = list(fit(work_objects, 
+                         df_train)))
+```
+
+This is our table, with our objects (workflows) and our fits on the train data in separate columns.
+```{r}
+workflows_tbl
+```
+Model Assessment
+
+Let's take a look at what our models look like under the hood. 
+
+```{r}
+df_parsnip_1 |>
+  fit(draft_num ~ .,
+      data = df_train) |>
+  tidy()
+```
+```{r}
+df_parsnip_2 |>
+  fit(draft_num ~ .,
+      data = df_train) |>
+  tidy()
+```
+```{r}
+df_workflow_3 |>
+  fit(df_train) |>
+  extract_fit_engine()
+```
+```{r}
+df_workflow_4 |>
+  fit(df_train) |>
+  extract_fit_engine()
+```
+
+```{r}
+df_workflow_5 |>
+  fit(df_train) |>
+  extract_fit_engine()
+```
+And now see how well the models are fitting the data they were trained on.
+
+```{r}
+workflows_tbl <- workflows_tbl |>
+  dplyr::select(work_names, work_objects, fits) |>
+  mutate(pred_class_tr = list(predict(fits,
+                                    df_train,
+                                   type = "class"))) |>
+  mutate(pred_prob_tr = list(predict(fits,
+                                    df_train,
+                                   type = "prob")))
+```
+
+
+```{r}
+workflows_tbl <- workflows_tbl |>
+  mutate(predictions_tr = list(bind_cols(pred_class_tr, pred_prob_tr))) |>
+  dplyr::select(-c(pred_class_tr, pred_prob_tr))
+```
+
+```{r}
+predictions_tr_tbl  <- workflows_tbl |>
+  dplyr::select(work_names, 
+         predictions_tr) |>
+  unnest(cols = c(predictions_tr)) |>
+  cbind(draft_num = df_train |>
+          pull(draft_num))
+
+predictions_tr_tbl |>
+  glimpse()
+```
+```{r}
+predictions_tr_tbl |>
+  filter(work_names == "glm_lasso") |>
+  conf_mat(truth = draft_num, estimate = .pred_class)
+```
+
+```{r}
+predictions_tr_tbl |>
+  filter(work_names == "glm_PCA") |>
+  conf_mat(truth = draft_num, estimate = .pred_class)
+```
+
+
+```{r}
+predictions_tr_tbl |>
+  filter(work_names == "KNN") |>
+  conf_mat(truth = draft_num, estimate = .pred_class)
+```
+```{r}
+predictions_tr_tbl |>
+  filter(work_names == "rf") |>
+  conf_mat(truth = draft_num, estimate = .pred_class)
+```
+
+```{r}
+predictions_tr_tbl |>
+  filter(work_names == "naive_bayes") |>
+  conf_mat(truth = draft_num, estimate = .pred_class)
+```
+
+
+Now, we add the test predictions for the draft_num response variable. 
+
+```{r}
+workflows_tbl <- workflows_tbl |>
+  dplyr::select(work_names, work_objects, fits) |>
+  mutate(pred_class = list(predict(fits,
+                                    df_test,
+                                   type = "class"))) |>
+  mutate(pred_prob = list(predict(fits,
+                                    df_test,
+                                   type = "prob")))
+```
+
+
+```{r}
+workflows_tbl <- workflows_tbl |>
+  mutate(predictions = list(bind_cols(pred_class, pred_prob))) |>
+  dplyr::select(-c(pred_class, pred_prob))
+```
+
+```{r}
+predictions_tbl  <- workflows_tbl |>
+  dplyr::select(work_names, 
+         predictions) |>
+  unnest(cols = c(predictions)) |>
+  cbind(draft_num = df_test |>
+          pull(draft_num))
+
+predictions_tbl |>
+  glimpse()
+```
+
+Assessing uncertainty: Prediction results on Test Data
+
+```{r}
+predictions_tbl |>
+  filter(work_names == "glm_lasso") |>
+  conf_mat(truth = draft_num, estimate = .pred_class)
+```
+
+```{r}
+predictions_tbl |>
+  filter(work_names == "glm_PCA") |>
+  conf_mat(truth = draft_num, estimate = .pred_class)
+```
+
+
+```{r}
+predictions_tbl |>
+  filter(work_names == "KNN") |>
+  conf_mat(truth = draft_num, estimate = .pred_class)
+```
+
+```{r}
+predictions_tbl |>
+  filter(work_names == "rf") |>
+  conf_mat(truth = draft_num, estimate = .pred_class)
+```
+
+```{r}
+predictions_tbl |>
+  filter(work_names == "naive_bayes") |>
+  conf_mat(truth = draft_num, estimate = .pred_class)
+```
+It seems as though overall, the models are predicting too many zeroes-- they think too many of the test data are from the first draft. This issue is quite apparent with the GLM models, which predict less than 30 of the documents in the test set to have been from the second draft. Let's take a look at some other metrics, starting with F1. 
+
+```{r}
+predictions_tbl |>  
+  filter(work_names == "glm_lasso") |>  
+  f_meas(truth = draft_num, 
+         estimate =.pred_class)
+```
+```{r}
+predictions_tbl |>  
+  filter(work_names == "glm_PCA") |>  
+  f_meas(truth = draft_num, 
+         estimate =.pred_class)
+```
+```{r}
+predictions_tbl |>  
+  filter(work_names == "KNN") |>  
+  f_meas(truth = draft_num, 
+         estimate =.pred_class)
+```
+
+
+```{r}
+predictions_tbl |>  
+  filter(work_names == "rf") |>  
+  f_meas(truth = draft_num, 
+         estimate =.pred_class)
+```
+```{r}
+predictions_tbl |>  
+  filter(work_names == "naive_bayes") |>  
+  f_meas(truth = draft_num, 
+         estimate =.pred_class)
+```
+
+It looks as though by this metric, GLM-lasso does the best by a small margin.
+
+```{r}
+classification_metrics <- metric_set(accuracy, mcc, f_meas)
+
+df_results <- predictions_tbl |>
+  group_by(work_names) |>
+    classification_metrics(truth = draft_num,
+                         estimate =.pred_class)
+```
+
+```{r}
+df_results |>
+  ggplot(aes(y = work_names, 
+             x = .estimate, 
+             fill = work_names)) + 
+  geom_col() +
+  facet_wrap(~.metric, scales = "free_x")
+```
+Taking mcc into account, along with F1 and accuracy, our two best models are the glm_lasso and the random forest. We can also compare the ROC curves for the five models: 
+
+```{r}
+roc_all <- predictions_tbl |>
+  group_by(work_names) |>
+  roc_curve(truth = draft_num,
+            .pred_1,
+            event_level = "second")
+
+roc_all |>
+  ggplot(aes(x = 1- specificity, 
+             y = sensitivity, 
+             color = work_names)) +
+  geom_path()
+```
+Though none of them are necessarily great, the pink line (random forest) looks to be best. 
+
+DISCUSSION: It seems as though, based on the confusion matrices for rf and knn in the train and test data, there was some overfitting happening. Perhaps this was to be expected-- there were a lot of columns that were extracted and not a lot of rows, all things considered. Perhaps using PCA to cut the columns down would have helped some.
+
+Let's test that theory by cutting down our columns to 3 with PCA, then fitting an rf model on the result.
+
+```{r}
+df_new <- df |>
+  mutate(draft_num = as.factor(draft_num)) |>
+  dplyr::select(-c(text, text_id, chapter, draft_num))
+
+pca_df <- prcomp(df_new, scale. = TRUE, rank. = 3)
+```
+
+
+```{r}
+new <- as.data.frame(pca_df$x)
+
+new <- new |>
+  mutate(draft_num = as.factor(df$draft_num))
+```
+
+```{r}
+set.seed(12345)
+new_split <- initial_split(new, 
+                              prop = 0.8)
+
+new_train <- new_split |>
+  training()
+
+new_test <- new_split |>
+  testing()
+```
+
+```{r}
+new_parsnip_rf <- rand_forest() |> 
+  set_mode("classification") |>
+  set_engine("ranger")
+
+new_workflow_rf <- workflow() |>
+  add_model(new_parsnip_rf) |>
+  add_formula(draft_num ~ .)
+```
+
+```{r}
+new_workflow_rf |>
+  fit(new_train) |>
+  extract_fit_engine()
+```
+```{r}
+predictions <- new_workflow_rf |>
+  fit(new_train) |>
+  predict(new_train) |>
+  pull(.pred_class)
+```
+
+
+```{r}
+table(Actual = new_train$draft_num, Predicted = predictions)
+```
+It still does pretty well on the train data! Let's try using the test now:
+
+```{r}
+predictions <- new_workflow_rf |>
+  fit(new_train) |>
+  predict(new_test) |>
+  pull(.pred_class)
+```
+
+
+```{r}
+table(Actual = new_test$draft_num, Predicted = predictions)
+```
+The model continues to predict too many zeroes. I tried a number of different things to fix this problem, but the models I built seemed to always predict far too many zeroes. Perhaps I could have tinkered longer with things to get a better result, but I was still able to report some success in model prediction with what I had. Overall, despite everything, I would say that random forest performed the best because of the various metrics I measured on the test data, including ROC, accuracy, F1, and mcc. 
+
+Also, the most challenging part of this analysis by far was the feature extraction. It was computationally a very long process, as pulling out parts of speech took some time, and the topic modeling was not straightforward as well. I had to use lots of regular expressions and pivoting of columns to end up making it all work. 
+
+My aim was to build a model that, given a document, could classify it into one of two categories-- draft one or draft two. The models I build had moderate success, especially the random forest, though they were not without fault (and potential overfitting). I filtered out character names and simply built these models off of factors like document length in words, sentiment scoring, LDA topic probabilities, and part of speech proportion. Perhaps it does make sense that the models weren't excellent at predicting the drafts that the documents came from-- they were only four paragraphs in length, and I wrote both drafts within about a year of each other. But it was an interesting experience to see what exactly they did in an attempt of classification. Moving forward, more data could be extracted from the text-- perhaps other ways of scoring sentiment, dialogue proportion, punctuation counts, and tf/idf scoring averages might all give more insight into how my writing changed from draft 1 to draft 2. 
+
+Used: List columns in dataframes, regular expressions to filter data, principal component analysis, topic modeling, word cloud representation of data
+
